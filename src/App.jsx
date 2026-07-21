@@ -704,7 +704,7 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
       return (
         <button
           onClick={() => setIsConnectionModalOpen(true)}
-          className="flex items-center gap-1.5 bg-amber-500/10 border border-amber-500/20 text-amber-400 px-2.5 py-1 rounded-full text-[10px] font-black hover:bg-amber-500/20 transition-all"
+          className="flex items-center gap-1.5 bg-amber-500/10 border border-amber-500/20 text-amber-400 px-3 py-1.5 rounded-xl text-[10px] font-black hover:bg-amber-500/20 transition-all active:scale-95 cursor-pointer"
         >
           <Zap size={10} /> Demo Mode
         </button>
@@ -716,7 +716,7 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
         return (
           <button
             onClick={() => setIsConnectionModalOpen(true)}
-            className="flex items-center gap-1.5 bg-lime-500/10 border border-lime-400/20 text-lime-400 px-2.5 py-1 rounded-full text-[10px] font-black hover:bg-lime-400/20 transition-all"
+            className="flex items-center gap-1.5 bg-lime-500/10 border border-lime-400/20 text-lime-400 px-3 py-1.5 rounded-xl text-[10px] font-black hover:bg-lime-400/20 transition-all active:scale-95 cursor-pointer"
           >
             <span className="w-1.5 h-1.5 rounded-full bg-lime-400 animate-pulse"></span>
             Online {pingLatency ? `${pingLatency}ms` : ""}
@@ -727,7 +727,7 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
         return (
           <button
             onClick={() => setIsConnectionModalOpen(true)}
-            className="flex items-center gap-1.5 bg-red-500/10 border border-red-500/20 text-red-400 px-2.5 py-1 rounded-full text-[10px] font-black hover:bg-red-500/20 transition-all"
+            className="flex items-center gap-1.5 bg-red-500/10 border border-red-500/20 text-red-400 px-3 py-1.5 rounded-xl text-[10px] font-black hover:bg-red-500/20 transition-all active:scale-95 cursor-pointer"
           >
             <WifiOff size={10} /> Offline
           </button>
@@ -736,7 +736,7 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
         return (
           <button
             onClick={() => setIsConnectionModalOpen(true)}
-            className="flex items-center gap-1.5 bg-zinc-800 text-zinc-400 px-2.5 py-1 rounded-full text-[10px] font-black"
+            className="flex items-center gap-1.5 bg-zinc-800 text-zinc-400 px-3 py-1.5 rounded-xl text-[10px] font-black cursor-pointer"
           >
             <RefreshCw size={10} className="animate-spin" /> Connecting
           </button>
@@ -757,9 +757,9 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
         isDemoMode={isDemoMode}
       />
 
-      {/* HEADER TOP BAR */}
+      {/* HEADER TOP BAR CỐ ĐỊNH ON TOP */}
       {showTabBar && (
-        <div className="px-4 pt-3.5 pb-2 border-b border-zinc-900/80 flex items-center justify-between bg-zinc-900/30 backdrop-blur-md">
+        <header className="sticky top-0 z-40 px-4 py-3 border-b border-zinc-900/90 flex items-center justify-between bg-zinc-950/95 backdrop-blur-xl shadow-md shadow-black/40">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-full bg-zinc-800 border border-zinc-700 flex items-center justify-center font-black text-xs text-lime-400 shadow-md">
               {isDemoMode ? "D" : sessionUser?.email ? sessionUser.email.substring(0, 2).toUpperCase() : "U"}
@@ -780,26 +780,26 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
             {isAdmin && !isDemoMode && (
               <button
                 onClick={() => setIsAdminPanelOpen(true)}
-                className="flex items-center gap-1 bg-lime-500/10 text-lime-400 border border-lime-400/20 px-2.5 py-1 rounded-full text-[10px] font-black hover:bg-lime-400/20 transition-all active:scale-95"
+                className="flex items-center gap-1 bg-lime-500/10 text-lime-400 border border-lime-400/20 px-2.5 py-1.5 rounded-xl text-[10px] font-black hover:bg-lime-400/20 transition-all active:scale-95 cursor-pointer"
               >
-                <Settings size={10} /> Admin
+                <Settings size={11} /> Admin
               </button>
             )}
 
             {/* Nút Đăng xuất */}
             <button
               onClick={handleLogout}
-              className="p-1.5 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-red-400 transition-colors"
+              className="p-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-400 hover:text-red-400 active:scale-95 transition-all cursor-pointer"
               title="Đăng xuất"
             >
-              <LogOut size={13} />
+              <LogOut size={15} />
             </button>
           </div>
-        </div>
+        </header>
       )}
 
-      {/* KHU VỰC HIỂN THỊ MÀN HÌNH CHÍNH */}
-      <main className="flex-1 w-full pb-6">
+      {/* KHU VỰC HIỂN THỊ MÀN HÌNH CHÍNH (Tăng pb-28 để cuộn qua hết thanh menu dưới) */}
+      <main className="flex-1 w-full pb-28">
         {renderActiveScreen()}
       </main>
 
