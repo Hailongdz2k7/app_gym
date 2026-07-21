@@ -36,6 +36,8 @@ export const workoutSplit = {
   }
 };
 
+export const getDefaultWorkoutSplit = () => JSON.parse(JSON.stringify(workoutSplit));
+
 export const exercisesDb = {
   // --- PUSH: NGỰC (CHEST) ---
   bench_press: {

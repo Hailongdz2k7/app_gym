@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Dumbbell, Scale, LogOut, Settings, WifiOff, Zap, RefreshCw } from "lucide-react";
-import { workoutSplit, exercisesDb } from "./data/exercises";
+import { getDefaultWorkoutSplit, exercisesDb } from "./data/exercises";
 import { supabase, isSupabaseConfigured } from "./supabaseClient";
 import Dashboard from "./components/Dashboard";
 import WorkoutSession from "./components/WorkoutSession";
@@ -16,18 +16,20 @@ import { queueOfflineAction } from "./services/connectionService";
 // --- CÁC HÀM TRUY XUẤT LOCAL STORAGE ĐỘNG THEO USER ID ---
 const getLocalStorageData = (key, userId, defaultValue) => {
   try {
-    const userKey = `flexifit-${userId || "demo"}-${key}`;
+    if (!userId) return defaultValue !== undefined ? JSON.parse(JSON.stringify(defaultValue)) : null;
+    const userKey = `flexifit-${userId}-${key}`;
     const item = window.localStorage.getItem(userKey);
-    return item ? JSON.parse(item) : defaultValue;
+    return item ? JSON.parse(item) : (defaultValue !== undefined ? JSON.parse(JSON.stringify(defaultValue)) : null);
   } catch (e) {
     console.error(`Error reading localStorage key:`, e);
-    return defaultValue;
+    return defaultValue !== undefined ? JSON.parse(JSON.stringify(defaultValue)) : null;
   }
 };
 
 const setLocalStorageData = (key, userId, value) => {
   try {
-    const userKey = `flexifit-${userId || "demo"}-${key}`;
+    if (!userId) return;
+    const userKey = `flexifit-${userId}-${key}`;
     window.localStorage.setItem(userKey, JSON.stringify(value));
   } catch (e) {
     console.error(`Error writing localStorage key:`, e);
@@ -74,13 +76,26 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
   const [weightHistory, setWeightHistory] = useState([]);
   const [height, setHeight] = useState(170);
   const [workoutHistory, setWorkoutHistory] = useState({});
-  const [customWorkoutSplit, setCustomWorkoutSplit] = useState(workoutSplit);
+  const [customWorkoutSplit, setCustomWorkoutSplit] = useState(() => getDefaultWorkoutSplit());
 
   // Trạng thái buổi tập đang diễn ra
   const [currentSession, setCurrentSession] = useState(null); 
   const [sessionExercises, setSessionExercises] = useState([]);
   const [sessionSets, setSessionSets] = useState({});
   const [workoutModeActiveIndex, setWorkoutModeActiveIndex] = useState(-1);
+
+  // Hàm dọn dẹp sạch state về mặc định độc lập khi chuyển đổi tài khoản
+  const resetUserState = () => {
+    setCustomWorkoutSplit(getDefaultWorkoutSplit());
+    setWeightHistory([]);
+    setWorkoutHistory({});
+    setHeight(170);
+    setCurrentSession(null);
+    setSessionExercises([]);
+    setSessionSets({});
+    setWorkoutModeActiveIndex(-1);
+    setIsAdminPanelOpen(false);
+  };
 
   // 1. THEO DÕI TRẠNG THÁI AUTH CỦA SUPABASE LÚC KHỞI ĐỘNG
   useEffect(() => {
@@ -106,9 +121,7 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
         setSessionUser(null);
         setUserProfile(null);
         setAuthChecking(false);
-        setWeightHistory([]);
-        setWorkoutHistory({});
-        setCustomWorkoutSplit(workoutSplit);
+        resetUserState();
       }
     });
 
@@ -149,6 +162,9 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
   // 3. TẢI THÔNG TIN PROFILE VÀ DỮ LIỆU TẬP LUYỆN ONLINE CỦA USER
   const fetchUserProfile = async (user) => {
     setAuthChecking(true);
+    // Dọn dẹp bộ nhớ đệm state của user cũ trước
+    resetUserState();
+
     try {
       let { data: profile, error } = await supabase
         .from("profiles")
@@ -174,7 +190,7 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
       await loadUserOnlineData(user.id);
     } catch (e) {
       console.error("Lỗi đồng bộ dữ liệu với Supabase:", e.message);
-      const userSplit = getLocalStorageData("custom-workout-split", user.id, workoutSplit);
+      const userSplit = getLocalStorageData("custom-workout-split", user.id, getDefaultWorkoutSplit());
       const userWeight = getLocalStorageData("weight-history", user.id, []);
       const userLogs = getLocalStorageData("workout-history", user.id, {});
       
@@ -215,11 +231,26 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
         setCustomWorkoutSplit(split.split_data);
         setLocalStorageData("custom-workout-split", userId, split.split_data);
       } else {
-        const localSplit = getLocalStorageData("custom-workout-split", userId, workoutSplit);
-        setCustomWorkoutSplit(localSplit);
-        await supabase
-          .from("custom_workout_splits")
-          .upsert({ user_id: userId, split_data: localSplit }, { onConflict: "user_id" });
+        // Kiểm tra xem User này có lịch lưu trong LocalStorage chưa
+        const localSplit = getLocalStorageData("custom-workout-split", userId, null);
+        if (localSplit) {
+          setCustomWorkoutSplit(localSplit);
+          if (connectionStatus === "online") {
+            await supabase
+              .from("custom_workout_splits")
+              .upsert({ user_id: userId, split_data: localSplit }, { onConflict: "user_id" });
+          }
+        } else {
+          // Khởi tạo bộ lịch hoàn toàn mới độc lập từ mẫu mặc định
+          const freshSplit = getDefaultWorkoutSplit();
+          setCustomWorkoutSplit(freshSplit);
+          setLocalStorageData("custom-workout-split", userId, freshSplit);
+          if (connectionStatus === "online") {
+            await supabase
+              .from("custom_workout_splits")
+              .upsert({ user_id: userId, split_data: freshSplit }, { onConflict: "user_id" });
+          }
+        }
       }
 
       // C. Tải Nhật ký tập (user_logs)
@@ -236,7 +267,7 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
             const dateObj = new Date(dateStr);
             const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
             const dayName = days[dateObj.getDay()];
-            const splitOfThisDay = (split?.split_data || workoutSplit)[dayName];
+            const splitOfThisDay = (split?.split_data || getDefaultWorkoutSplit())[dayName];
             
             formattedHistory[dateStr] = {
               dayKey: dayName,
@@ -265,9 +296,10 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
 
   // Kích hoạt chế độ Demo Offline
   const handleStartDemo = () => {
+    resetUserState();
     setIsDemoMode(true);
     
-    const demoSplit = getLocalStorageData("custom-workout-split", "demo", workoutSplit);
+    const demoSplit = getLocalStorageData("custom-workout-split", "demo", getDefaultWorkoutSplit());
     const demoWeight = getLocalStorageData("weight-history", "demo", [
       { date: "2026-07-15", weight: 71.2 },
       { date: "2026-07-17", weight: 70.8 },
@@ -288,17 +320,13 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
   const handleLogout = async () => {
     if (isDemoMode) {
       setIsDemoMode(false);
-      setWeightHistory([]);
-      setWorkoutHistory({});
-      setCustomWorkoutSplit(workoutSplit);
+      resetUserState();
       return;
     }
     await supabase.auth.signOut();
     setSessionUser(null);
     setUserProfile(null);
-    setWeightHistory([]);
-    setWorkoutHistory({});
-    setCustomWorkoutSplit(workoutSplit);
+    resetUserState();
     addToast("Đã đăng xuất tài khoản.", "info");
   };
 
@@ -329,7 +357,7 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
     setSessionSets(newSets);
     const todayStr = new Date().toISOString().split('T')[0];
     
-    const updatedHistory = { ...workoutHistory };
+    const updatedHistory = JSON.parse(JSON.stringify(workoutHistory));
     if (!updatedHistory[todayStr]) {
       updatedHistory[todayStr] = {
         dayKey: currentSession?.dayKey,
@@ -367,7 +395,6 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
                 completed: isCompleted
               });
           } else {
-            // Trường hợp offline, đẩy vào hàng chờ đồng bộ
             queueOfflineAction("SAVE_SETS", {
               date: todayStr,
               exerciseId: exId,
@@ -379,7 +406,6 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
         }
       } catch (e) {
         console.error("Lỗi đồng bộ sets lên Supabase:", e.message);
-        // Fallback queue offline
         for (const exId of sessionExercises) {
           const setsArray = newSets[exId] || [];
           const isCompleted = setsArray.length > 0 && setsArray.every(s => s.completed);
@@ -400,7 +426,7 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
     setSessionExercises(newExercises);
     const todayStr = new Date().toISOString().split('T')[0];
 
-    const updatedHistory = { ...workoutHistory };
+    const updatedHistory = JSON.parse(JSON.stringify(workoutHistory));
     if (!updatedHistory[todayStr]) {
       updatedHistory[todayStr] = {
         dayKey: currentSession?.dayKey,
@@ -421,7 +447,8 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
 
   // --- CẬP NHẬT LỊCH TẬP TUẦN TỰ SẮP XẾP ---
   const handleReorderExercisesInSplit = async (dayKey, index, direction) => {
-    const newSplit = { ...customWorkoutSplit };
+    // Deep clone để tránh đột biến bộ nhớ đệm
+    const newSplit = JSON.parse(JSON.stringify(customWorkoutSplit));
     if (!newSplit[dayKey] || !newSplit[dayKey].exercises) return;
 
     const list = [...newSplit[dayKey].exercises];
@@ -454,7 +481,8 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
   };
 
   const handleAddExerciseToSplit = async (dayKey, exerciseId) => {
-    const newSplit = { ...customWorkoutSplit };
+    // Deep clone để tránh đột biến bộ nhớ đệm
+    const newSplit = JSON.parse(JSON.stringify(customWorkoutSplit));
     if (!newSplit[dayKey]) return;
 
     const list = newSplit[dayKey].exercises ? [...newSplit[dayKey].exercises] : [];
@@ -492,7 +520,8 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
   };
 
   const handleRemoveExerciseFromSplit = async (dayKey, exerciseId) => {
-    const newSplit = { ...customWorkoutSplit };
+    // Deep clone để tránh đột biến bộ nhớ đệm
+    const newSplit = JSON.parse(JSON.stringify(customWorkoutSplit));
     if (!newSplit[dayKey] || !newSplit[dayKey].exercises) return;
 
     const list = newSplit[dayKey].exercises.filter(id => id !== exerciseId);
