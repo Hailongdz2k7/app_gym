@@ -76,3 +76,31 @@ export const isEnvConfigured = () => {
   );
 };
 
+// Hàm kiểm tra trực tiếp khả năng phản hồi thực tế (Ping latency) của Supabase backend
+export const pingSupabase = async () => {
+  if (!isSupabaseConfigured()) {
+    return { ok: false, latency: null, error: 'Chưa cấu hình Supabase URL & Key' };
+  }
+
+  const startTime = performance.now();
+  try {
+    // Thực hiện truy vấn kiểm tra nhẹ tới bảng exercises_db hoặc RPC auth
+    const { error } = await supabase.from('exercises_db').select('id', { count: 'exact', head: true });
+    const endTime = performance.now();
+    const latency = Math.round(endTime - startTime);
+
+    if (error && error.code !== 'PGRST116') {
+      // Một số lỗi RLS hoặc bảng chưa tạo vẫn coi là đã kết nối được với server HTTP
+      if (error.status >= 200 && error.status < 500) {
+        return { ok: true, latency, status: error.status };
+      }
+      return { ok: false, latency, error: error.message };
+    }
+    return { ok: true, latency };
+  } catch (err) {
+    const endTime = performance.now();
+    return { ok: false, latency: Math.round(endTime - startTime), error: err.message || 'Mất kết nối mạng' };
+  }
+};
+
+

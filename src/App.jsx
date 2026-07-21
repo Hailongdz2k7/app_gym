@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Dumbbell, Scale, LogOut, Settings } from "lucide-react";
+import { Dumbbell, Scale, LogOut, Settings, WifiOff, Zap, RefreshCw } from "lucide-react";
 import { workoutSplit, exercisesDb } from "./data/exercises";
 import { supabase, isSupabaseConfigured } from "./supabaseClient";
 import Dashboard from "./components/Dashboard";
@@ -8,6 +8,10 @@ import WorkoutMode from "./components/WorkoutMode";
 import PersonalStats from "./components/PersonalStats";
 import Auth from "./components/Auth";
 import AdminPanel from "./components/AdminPanel";
+import ConnectionModal from "./components/ConnectionModal";
+import Toast from "./components/Toast";
+import { ConnectionProvider, useConnection } from "./context/ConnectionContext";
+import { queueOfflineAction } from "./services/connectionService";
 
 // --- CÁC HÀM TRUY XUẤT LOCAL STORAGE ĐỘNG THEO USER ID ---
 const getLocalStorageData = (key, userId, defaultValue) => {
@@ -31,11 +35,32 @@ const setLocalStorageData = (key, userId, value) => {
 };
 
 export default function App() {
-  // Trạng thái Xác thực (Auth)
   const [sessionUser, setSessionUser] = useState(null);
-  const [userProfile, setUserProfile] = useState(null);
   const [isDemoMode, setIsDemoMode] = useState(false);
+
+  const currentUserId = sessionUser?.id || (isDemoMode ? "demo" : null);
+
+  return (
+    <ConnectionProvider currentUserId={currentUserId}>
+      <AppContent 
+        sessionUser={sessionUser} 
+        setSessionUser={setSessionUser} 
+        isDemoMode={isDemoMode} 
+        setIsDemoMode={setIsDemoMode} 
+        currentUserId={currentUserId}
+      />
+    </ConnectionProvider>
+  );
+}
+
+function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, currentUserId }) {
+  const { connectionStatus, pingLatency, pendingCount, toasts, removeToast, addToast } = useConnection();
+
+  const [userProfile, setUserProfile] = useState(null);
   const [authChecking, setAuthChecking] = useState(true);
+
+  // Modal kiểm tra kết nối
+  const [isConnectionModalOpen, setIsConnectionModalOpen] = useState(false);
 
   // Màn hình đang mở tab Admin
   const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
@@ -57,9 +82,6 @@ export default function App() {
   const [sessionSets, setSessionSets] = useState({});
   const [workoutModeActiveIndex, setWorkoutModeActiveIndex] = useState(-1);
 
-  // Lấy ID hiện tại (để phân tách key LocalStorage)
-  const currentUserId = sessionUser?.id || (isDemoMode ? "demo" : null);
-
   // 1. THEO DÕI TRẠNG THÁI AUTH CỦA SUPABASE LÚC KHỞI ĐỘNG
   useEffect(() => {
     if (!isSupabaseConfigured()) {
@@ -67,7 +89,6 @@ export default function App() {
       return;
     }
 
-    // Lấy thông tin session hiện tại
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user) {
         setSessionUser(session.user);
@@ -77,7 +98,6 @@ export default function App() {
       }
     });
 
-    // Lắng nghe thay đổi trạng thái Auth
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session?.user) {
         setSessionUser(session.user);
@@ -86,7 +106,6 @@ export default function App() {
         setSessionUser(null);
         setUserProfile(null);
         setAuthChecking(false);
-        // Reset dữ liệu về mặc định khi mất session/đăng xuất
         setWeightHistory([]);
         setWorkoutHistory({});
         setCustomWorkoutSplit(workoutSplit);
@@ -152,11 +171,9 @@ export default function App() {
       setUserProfile(profile);
       setHeight(profile.height || 170);
 
-      // Tải dữ liệu online
       await loadUserOnlineData(user.id);
     } catch (e) {
       console.error("Lỗi đồng bộ dữ liệu với Supabase:", e.message);
-      // Fallback: Nạp dữ liệu Local của riêng user này
       const userSplit = getLocalStorageData("custom-workout-split", user.id, workoutSplit);
       const userWeight = getLocalStorageData("weight-history", user.id, []);
       const userLogs = getLocalStorageData("workout-history", user.id, {});
@@ -169,83 +186,84 @@ export default function App() {
     }
   };
 
-  // Tải dữ liệu từ Supabase về ứng dụng (Có cơ chế đồng bộ 2 chiều dự phòng Local theo ID)
+  // Tải dữ liệu từ Supabase về ứng dụng
   const loadUserOnlineData = async (userId) => {
-    // A. Tải Cân nặng
-    const { data: weights } = await supabase
-      .from("weight_history")
-      .select("date, weight")
-      .eq("user_id", userId)
-      .order("date", { ascending: true });
-    
-    if (weights && weights.length > 0) {
-      setWeightHistory(weights);
-      setLocalStorageData("weight-history", userId, weights);
-    } else {
-      // Nếu online trống, lấy dữ liệu offline của riêng user này làm khởi điểm
-      const localW = getLocalStorageData("weight-history", userId, []);
-      setWeightHistory(localW);
-    }
+    try {
+      // A. Tải Cân nặng
+      const { data: weights } = await supabase
+        .from("weight_history")
+        .select("date, weight")
+        .eq("user_id", userId)
+        .order("date", { ascending: true });
+      
+      if (weights && weights.length > 0) {
+        setWeightHistory(weights);
+        setLocalStorageData("weight-history", userId, weights);
+      } else {
+        const localW = getLocalStorageData("weight-history", userId, []);
+        setWeightHistory(localW);
+      }
 
-    // B. Tải Lịch tập tùy chỉnh (Splits)
-    const { data: split } = await supabase
-      .from("custom_workout_splits")
-      .select("split_data")
-      .eq("user_id", userId)
-      .single();
-    
-    if (split?.split_data) {
-      setCustomWorkoutSplit(split.split_data);
-      setLocalStorageData("custom-workout-split", userId, split.split_data);
-    } else {
-      // Nếu online trống, lấy lịch tùy chỉnh offline của riêng user này làm khởi điểm
-      const localSplit = getLocalStorageData("custom-workout-split", userId, workoutSplit);
-      setCustomWorkoutSplit(localSplit);
-      // Đẩy ngược cấu hình lịch hiện tại lên Supabase
-      await supabase
+      // B. Tải Lịch tập tùy chỉnh (Splits)
+      const { data: split } = await supabase
         .from("custom_workout_splits")
-        .upsert({ user_id: userId, split_data: localSplit }, { onConflict: "user_id" });
-    }
+        .select("split_data")
+        .eq("user_id", userId)
+        .single();
+      
+      if (split?.split_data) {
+        setCustomWorkoutSplit(split.split_data);
+        setLocalStorageData("custom-workout-split", userId, split.split_data);
+      } else {
+        const localSplit = getLocalStorageData("custom-workout-split", userId, workoutSplit);
+        setCustomWorkoutSplit(localSplit);
+        await supabase
+          .from("custom_workout_splits")
+          .upsert({ user_id: userId, split_data: localSplit }, { onConflict: "user_id" });
+      }
 
-    // C. Tải Nhật ký tập (user_logs)
-    const { data: logs } = await supabase
-      .from("user_logs")
-      .select("*")
-      .eq("user_id", userId);
+      // C. Tải Nhật ký tập (user_logs)
+      const { data: logs } = await supabase
+        .from("user_logs")
+        .select("*")
+        .eq("user_id", userId);
 
-    if (logs && logs.length > 0) {
-      const formattedHistory = {};
-      logs.forEach(row => {
-        const dateStr = row.date;
-        if (!formattedHistory[dateStr]) {
-          const dateObj = new Date(dateStr);
-          const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-          const dayName = days[dateObj.getDay()];
-          const splitOfThisDay = (split?.split_data || workoutSplit)[dayName];
+      if (logs && logs.length > 0) {
+        const formattedHistory = {};
+        logs.forEach(row => {
+          const dateStr = row.date;
+          if (!formattedHistory[dateStr]) {
+            const dateObj = new Date(dateStr);
+            const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+            const dayName = days[dateObj.getDay()];
+            const splitOfThisDay = (split?.split_data || workoutSplit)[dayName];
+            
+            formattedHistory[dateStr] = {
+              dayKey: dayName,
+              dayName: splitOfThisDay?.name || "Buổi tập",
+              type: splitOfThisDay?.type || "custom",
+              exercises: [],
+              sets: {}
+            };
+          }
           
-          formattedHistory[dateStr] = {
-            dayKey: dayName,
-            dayName: splitOfThisDay?.name || "Buổi tập",
-            type: splitOfThisDay?.type || "custom",
-            exercises: [],
-            sets: {}
-          };
-        }
-        
-        if (!formattedHistory[dateStr].exercises.includes(row.exercise_id)) {
-          formattedHistory[dateStr].exercises.push(row.exercise_id);
-        }
-        formattedHistory[dateStr].sets[row.exercise_id] = row.sets_data;
-      });
-      setWorkoutHistory(formattedHistory);
-      setLocalStorageData("workout-history", userId, formattedHistory);
-    } else {
-      const localHist = getLocalStorageData("workout-history", userId, {});
-      setWorkoutHistory(localHist);
+          if (!formattedHistory[dateStr].exercises.includes(row.exercise_id)) {
+            formattedHistory[dateStr].exercises.push(row.exercise_id);
+          }
+          formattedHistory[dateStr].sets[row.exercise_id] = row.sets_data;
+        });
+        setWorkoutHistory(formattedHistory);
+        setLocalStorageData("workout-history", userId, formattedHistory);
+      } else {
+        const localHist = getLocalStorageData("workout-history", userId, {});
+        setWorkoutHistory(localHist);
+      }
+    } catch (err) {
+      console.warn("Mất kết nối server khi tải dữ liệu online, nạp dữ liệu local thay thế.", err);
     }
   };
 
-  // Kích hoạt chế độ Demo Offline (đọc từ LocalStorage key flexifit-demo-...)
+  // Kích hoạt chế độ Demo Offline
   const handleStartDemo = () => {
     setIsDemoMode(true);
     
@@ -263,13 +281,13 @@ export default function App() {
     setWeightHistory(demoWeight);
     setWorkoutHistory(demoLogs);
     setHeight(demoHeight);
+    addToast("Đã kích hoạt Chế độ Demo Offline!", "warning");
   };
 
   // Đăng xuất và dọn dẹp state
   const handleLogout = async () => {
     if (isDemoMode) {
       setIsDemoMode(false);
-      // Reset state về mặc định
       setWeightHistory([]);
       setWorkoutHistory({});
       setCustomWorkoutSplit(workoutSplit);
@@ -281,6 +299,7 @@ export default function App() {
     setWeightHistory([]);
     setWorkoutHistory({});
     setCustomWorkoutSplit(workoutSplit);
+    addToast("Đã đăng xuất tài khoản.", "info");
   };
 
   // Mở màn hình tập luyện & tải dữ liệu hoạt động
@@ -310,7 +329,6 @@ export default function App() {
     setSessionSets(newSets);
     const todayStr = new Date().toISOString().split('T')[0];
     
-    // Cập nhật state workoutHistory trước
     const updatedHistory = { ...workoutHistory };
     if (!updatedHistory[todayStr]) {
       updatedHistory[todayStr] = {
@@ -323,40 +341,61 @@ export default function App() {
     updatedHistory[todayStr].sets = newSets;
     setWorkoutHistory(updatedHistory);
     
-    // Luôn luôn lưu dự phòng vào LocalStorage của riêng user_id này
     setLocalStorageData("workout-history", currentUserId, updatedHistory);
 
-    // LƯU TRỮ ONLINE (Supabase)
     if (sessionUser && !isDemoMode) {
       try {
         for (const exId of sessionExercises) {
           const setsArray = newSets[exId] || [];
           const isCompleted = setsArray.length > 0 && setsArray.every(s => s.completed);
 
-          await supabase
-            .from("user_logs")
-            .delete()
-            .eq("user_id", sessionUser.id)
-            .eq("date", todayStr)
-            .eq("exercise_id", exId);
+          if (connectionStatus === "online") {
+            await supabase
+              .from("user_logs")
+              .delete()
+              .eq("user_id", sessionUser.id)
+              .eq("date", todayStr)
+              .eq("exercise_id", exId);
 
-          await supabase
-            .from("user_logs")
-            .insert({
-              user_id: sessionUser.id,
+            await supabase
+              .from("user_logs")
+              .insert({
+                user_id: sessionUser.id,
+                date: todayStr,
+                exercise_id: exId,
+                sets_data: setsArray,
+                completed: isCompleted
+              });
+          } else {
+            // Trường hợp offline, đẩy vào hàng chờ đồng bộ
+            queueOfflineAction("SAVE_SETS", {
               date: todayStr,
-              exercise_id: exId,
-              sets_data: setsArray,
+              exerciseId: exId,
+              setsArray,
               completed: isCompleted
             });
+            addToast("Đã lưu offline vào thiết bị! Sẽ tự động đồng bộ khi có kết nối.", "warning");
+          }
         }
       } catch (e) {
         console.error("Lỗi đồng bộ sets lên Supabase:", e.message);
+        // Fallback queue offline
+        for (const exId of sessionExercises) {
+          const setsArray = newSets[exId] || [];
+          const isCompleted = setsArray.length > 0 && setsArray.every(s => s.completed);
+          queueOfflineAction("SAVE_SETS", {
+            date: todayStr,
+            exerciseId: exId,
+            setsArray,
+            completed: isCompleted
+          });
+        }
+        addToast("Mất kết nối server, đã lưu offline thành công.", "warning");
       }
     }
   };
 
-  // Lưu và đồng bộ danh sách bài tập (ví dụ khi Swap bài tập)
+  // Lưu và đồng bộ danh sách bài tập
   const handleSaveExercises = async (newExercises) => {
     setSessionExercises(newExercises);
     const todayStr = new Date().toISOString().split('T')[0];
@@ -373,15 +412,10 @@ export default function App() {
     updatedHistory[todayStr].exercises = newExercises;
     setWorkoutHistory(updatedHistory);
 
-    // Lưu dự phòng vào Local
     setLocalStorageData("workout-history", currentUserId, updatedHistory);
 
     if (sessionUser && !isDemoMode) {
-      try {
-        handleSaveSets(sessionSets);
-      } catch (e) {
-        console.error(e);
-      }
+      handleSaveSets(sessionSets);
     }
   };
 
@@ -400,22 +434,22 @@ export default function App() {
     newSplit[dayKey].exercises = list;
 
     setCustomWorkoutSplit(newSplit);
-    
-    // Luôn luôn lưu dự phòng vào LocalStorage theo userId
     setLocalStorageData("custom-workout-split", currentUserId, newSplit);
 
-    // Đồng bộ tức thì với buổi tập hôm nay
-    const todayStr = new Date().toISOString().split('T')[0];
     if (currentSession && currentSession.dayKey === dayKey) {
       setSessionExercises(list);
       handleSaveExercises(list);
     }
 
-    // Lưu online lên Supabase
     if (sessionUser && !isDemoMode) {
-      await supabase
-        .from("custom_workout_splits")
-        .upsert({ user_id: sessionUser.id, split_data: newSplit }, { onConflict: "user_id" });
+      if (connectionStatus === "online") {
+        await supabase
+          .from("custom_workout_splits")
+          .upsert({ user_id: sessionUser.id, split_data: newSplit }, { onConflict: "user_id" });
+      } else {
+        queueOfflineAction("SAVE_SPLIT", { splitData: newSplit });
+        addToast("Đã lưu lịch tập offline.", "warning");
+      }
     }
   };
 
@@ -429,11 +463,8 @@ export default function App() {
     list.push(exerciseId);
     newSplit[dayKey].exercises = list;
     setCustomWorkoutSplit(newSplit);
-    
-    // Luôn luôn lưu dự phòng vào LocalStorage theo userId
     setLocalStorageData("custom-workout-split", currentUserId, newSplit);
 
-    // Đồng bộ với buổi tập
     if (currentSession && currentSession.dayKey === dayKey) {
       setSessionExercises(list);
       const newSets = { ...sessionSets };
@@ -449,9 +480,14 @@ export default function App() {
     }
 
     if (sessionUser && !isDemoMode) {
-      await supabase
-        .from("custom_workout_splits")
-        .upsert({ user_id: sessionUser.id, split_data: newSplit }, { onConflict: "user_id" });
+      if (connectionStatus === "online") {
+        await supabase
+          .from("custom_workout_splits")
+          .upsert({ user_id: sessionUser.id, split_data: newSplit }, { onConflict: "user_id" });
+      } else {
+        queueOfflineAction("SAVE_SPLIT", { splitData: newSplit });
+        addToast("Đã thêm bài tập offline.", "warning");
+      }
     }
   };
 
@@ -462,8 +498,6 @@ export default function App() {
     const list = newSplit[dayKey].exercises.filter(id => id !== exerciseId);
     newSplit[dayKey].exercises = list;
     setCustomWorkoutSplit(newSplit);
-    
-    // Luôn luôn lưu dự phòng vào LocalStorage theo userId
     setLocalStorageData("custom-workout-split", currentUserId, newSplit);
 
     if (currentSession && currentSession.dayKey === dayKey) {
@@ -475,9 +509,13 @@ export default function App() {
     }
 
     if (sessionUser && !isDemoMode) {
-      await supabase
-        .from("custom_workout_splits")
-        .upsert({ user_id: sessionUser.id, split_data: newSplit }, { onConflict: "user_id" });
+      if (connectionStatus === "online") {
+        await supabase
+          .from("custom_workout_splits")
+          .upsert({ user_id: sessionUser.id, split_data: newSplit }, { onConflict: "user_id" });
+      } else {
+        queueOfflineAction("SAVE_SPLIT", { splitData: newSplit });
+      }
     }
   };
 
@@ -487,10 +525,16 @@ export default function App() {
     setLocalStorageData("height", currentUserId, newHeight);
 
     if (sessionUser && !isDemoMode) {
-      await supabase
-        .from("profiles")
-        .update({ height: newHeight })
-        .eq("id", sessionUser.id);
+      if (connectionStatus === "online") {
+        await supabase
+          .from("profiles")
+          .update({ height: newHeight })
+          .eq("id", sessionUser.id);
+        addToast("Đã cập nhật chiều cao lên server!", "success");
+      } else {
+        queueOfflineAction("SAVE_HEIGHT", { height: newHeight });
+        addToast("Đã lưu chiều cao offline.", "warning");
+      }
     }
   };
 
@@ -508,21 +552,27 @@ export default function App() {
       try {
         const todayStr = new Date().toISOString().split("T")[0];
         const weightObj = updatedHistory.find(h => h.date === todayStr);
-        
-        await supabase
-          .from("weight_history")
-          .delete()
-          .eq("user_id", sessionUser.id)
-          .eq("date", todayStr);
 
-        if (weightObj) {
+        if (connectionStatus === "online") {
           await supabase
             .from("weight_history")
-            .insert({
-              user_id: sessionUser.id,
-              date: todayStr,
-              weight: weightObj.weight
-            });
+            .delete()
+            .eq("user_id", sessionUser.id)
+            .eq("date", todayStr);
+
+          if (weightObj) {
+            await supabase
+              .from("weight_history")
+              .insert({
+                user_id: sessionUser.id,
+                date: todayStr,
+                weight: weightObj.weight
+              });
+          }
+          addToast("Đã đồng bộ cân nặng lên đám mây!", "success");
+        } else {
+          queueOfflineAction("SAVE_WEIGHT", { date: todayStr, weight: weightObj?.weight });
+          addToast("Đã lưu cân nặng offline.", "warning");
         }
       } catch (e) {
         console.error("Lỗi đồng bộ cân nặng lên Supabase:", e.message);
@@ -534,7 +584,6 @@ export default function App() {
   const renderActiveScreen = () => {
     const activeExercisesDb = Object.keys(exercisesDbFromDb).length > 0 ? exercisesDbFromDb : exercisesDb;
 
-    // Chế độ Admin Panel chỉnh bài tập
     if (isAdminPanelOpen) {
       return (
         <AdminPanel 
@@ -546,7 +595,6 @@ export default function App() {
       );
     }
 
-    // 1. Chế độ tập nhanh (Workout Mode)
     if (workoutModeActiveIndex !== -1) {
       return (
         <WorkoutMode
@@ -562,7 +610,6 @@ export default function App() {
       );
     }
 
-    // 2. Màn hình chi tiết buổi tập (Workout Session)
     if (currentSession) {
       return (
         <WorkoutSession
@@ -580,7 +627,6 @@ export default function App() {
       );
     }
 
-    // 3. Tab Chỉ số (Personal Stats)
     if (activeTab === "stats") {
       return (
         <PersonalStats
@@ -593,7 +639,6 @@ export default function App() {
       );
     }
 
-    // 4. Màn hình chính (Dashboard)
     return (
       <Dashboard
         workoutHistory={workoutHistory}
@@ -609,7 +654,6 @@ export default function App() {
     );
   };
 
-  // Hiển thị màn hình chờ khi đang check auth
   if (authChecking) {
     return (
       <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col items-center justify-center font-sans">
@@ -619,7 +663,6 @@ export default function App() {
     );
   }
 
-  // Nếu chưa đăng nhập & không phải chế độ Demo, hiển thị màn hình Auth
   if (!sessionUser && !isDemoMode) {
     return <Auth onAuthSuccess={(user) => setSessionUser(user)} onStartDemo={handleStartDemo} />;
   }
@@ -627,41 +670,100 @@ export default function App() {
   const showTabBar = !currentSession && workoutModeActiveIndex === -1 && !isAdminPanelOpen;
   const isAdmin = userProfile?.role === "admin";
 
+  const renderConnectionPill = () => {
+    if (isDemoMode) {
+      return (
+        <button
+          onClick={() => setIsConnectionModalOpen(true)}
+          className="flex items-center gap-1.5 bg-amber-500/10 border border-amber-500/20 text-amber-400 px-2.5 py-1 rounded-full text-[10px] font-black hover:bg-amber-500/20 transition-all"
+        >
+          <Zap size={10} /> Demo Mode
+        </button>
+      );
+    }
+
+    switch (connectionStatus) {
+      case "online":
+        return (
+          <button
+            onClick={() => setIsConnectionModalOpen(true)}
+            className="flex items-center gap-1.5 bg-lime-500/10 border border-lime-400/20 text-lime-400 px-2.5 py-1 rounded-full text-[10px] font-black hover:bg-lime-400/20 transition-all"
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-lime-400 animate-pulse"></span>
+            Online {pingLatency ? `${pingLatency}ms` : ""}
+            {pendingCount > 0 && <span className="ml-0.5 bg-amber-400 text-zinc-950 px-1 rounded-full text-[8px]">{pendingCount}</span>}
+          </button>
+        );
+      case "offline":
+        return (
+          <button
+            onClick={() => setIsConnectionModalOpen(true)}
+            className="flex items-center gap-1.5 bg-red-500/10 border border-red-500/20 text-red-400 px-2.5 py-1 rounded-full text-[10px] font-black hover:bg-red-500/20 transition-all"
+          >
+            <WifiOff size={10} /> Offline
+          </button>
+        );
+      default:
+        return (
+          <button
+            onClick={() => setIsConnectionModalOpen(true)}
+            className="flex items-center gap-1.5 bg-zinc-800 text-zinc-400 px-2.5 py-1 rounded-full text-[10px] font-black"
+          >
+            <RefreshCw size={10} className="animate-spin" /> Connecting
+          </button>
+        );
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col font-sans antialiased overflow-x-hidden w-full max-w-md mx-auto">
-      {/* THÔNG TIN USER / ĐĂNG XUẤT / ADMIN PANEL */}
+    <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col font-sans antialiased overflow-x-hidden w-full max-w-md mx-auto relative">
+      
+      {/* Toast notifications */}
+      <Toast toasts={toasts} removeToast={removeToast} />
+
+      {/* Modal kiểm tra kết nối */}
+      <ConnectionModal
+        isOpen={isConnectionModalOpen}
+        onClose={() => setIsConnectionModalOpen(false)}
+        isDemoMode={isDemoMode}
+      />
+
+      {/* HEADER TOP BAR */}
       {showTabBar && (
-        <div className="px-4 pt-4 pb-1 border-b border-zinc-900/60 flex items-center justify-between bg-zinc-900/10">
+        <div className="px-4 pt-3.5 pb-2 border-b border-zinc-900/80 flex items-center justify-between bg-zinc-900/30 backdrop-blur-md">
           <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-full bg-zinc-800 flex items-center justify-center font-black text-xs text-lime-400">
+            <div className="w-8 h-8 rounded-full bg-zinc-800 border border-zinc-700 flex items-center justify-center font-black text-xs text-lime-400 shadow-md">
               {isDemoMode ? "D" : sessionUser?.email ? sessionUser.email.substring(0, 2).toUpperCase() : "U"}
             </div>
             <div className="flex flex-col">
-              <span className="text-[10px] text-zinc-500 font-black uppercase leading-none">Tài khoản</span>
-              <span className="text-[11px] font-bold text-zinc-300 truncate max-w-[120px] mt-0.5">
+              <span className="text-[9px] text-zinc-500 font-black uppercase leading-none">Tài khoản</span>
+              <span className="text-[11px] font-bold text-zinc-200 truncate max-w-[110px] mt-0.5">
                 {isDemoMode ? "Chế độ Demo" : sessionUser?.email}
               </span>
             </div>
           </div>
           
           <div className="flex items-center gap-2">
+            {/* Connection Badge Pill */}
+            {renderConnectionPill()}
+
             {/* Nút chuyển đổi Panel Admin */}
             {isAdmin && !isDemoMode && (
               <button
                 onClick={() => setIsAdminPanelOpen(true)}
-                className="flex items-center gap-1 bg-lime-500/10 text-lime-400 border border-lime-400/20 px-3 py-1.5 rounded-xl text-xs font-black hover:bg-lime-400/20 transition-all active:scale-95"
+                className="flex items-center gap-1 bg-lime-500/10 text-lime-400 border border-lime-400/20 px-2.5 py-1 rounded-full text-[10px] font-black hover:bg-lime-400/20 transition-all active:scale-95"
               >
-                <Settings size={12} /> BẢNG ADMIN
+                <Settings size={10} /> Admin
               </button>
             )}
 
             {/* Nút Đăng xuất */}
             <button
               onClick={handleLogout}
-              className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-red-400 transition-colors"
+              className="p-1.5 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-red-400 transition-colors"
               title="Đăng xuất"
             >
-              <LogOut size={14} />
+              <LogOut size={13} />
             </button>
           </div>
         </div>
@@ -674,12 +776,12 @@ export default function App() {
 
       {/* BOTTOM NAVIGATION TAB BAR */}
       {showTabBar && (
-        <nav className="fixed bottom-0 left-0 right-0 z-40 bg-zinc-900/90 border-t border-zinc-800/60 backdrop-blur-lg py-2 flex items-center justify-around shadow-lg shadow-black/40 max-w-md mx-auto rounded-t-2xl">
+        <nav className="fixed bottom-0 left-0 right-0 z-40 bg-zinc-900/95 border-t border-zinc-800/80 backdrop-blur-xl py-2 flex items-center justify-around shadow-2xl shadow-black max-w-md mx-auto rounded-t-2xl">
           <button
             onClick={() => setActiveTab("dashboard")}
-            className={`flex flex-col items-center gap-1 py-1 px-4 rounded-xl transition-all ${
+            className={`flex flex-col items-center gap-1 py-1 px-5 rounded-xl transition-all ${
               activeTab === "dashboard"
-                ? "text-lime-400 font-bold"
+                ? "text-lime-400 font-bold scale-105"
                 : "text-zinc-500 hover:text-zinc-300 font-medium"
             }`}
           >
@@ -689,9 +791,9 @@ export default function App() {
 
           <button
             onClick={() => setActiveTab("stats")}
-            className={`flex flex-col items-center gap-1 py-1 px-4 rounded-xl transition-all ${
+            className={`flex flex-col items-center gap-1 py-1 px-5 rounded-xl transition-all ${
               activeTab === "stats"
-                ? "text-lime-400 font-bold"
+                ? "text-lime-400 font-bold scale-105"
                 : "text-zinc-500 hover:text-zinc-300 font-medium"
             }`}
           >
