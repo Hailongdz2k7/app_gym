@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Dumbbell, Scale, LogOut, Settings, WifiOff, Zap, RefreshCw } from "lucide-react";
 import { getDefaultWorkoutSplit, exercisesDb } from "./data/exercises";
 import { supabase, isSupabaseConfigured } from "./supabaseClient";
@@ -84,6 +84,9 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
   const [sessionSets, setSessionSets] = useState({});
   const [workoutModeActiveIndex, setWorkoutModeActiveIndex] = useState(-1);
 
+  // Kênh Supabase Realtime Channel
+  const realtimeChannelRef = useRef(null);
+
   // Hàm dọn dẹp sạch state về mặc định độc lập khi chuyển đổi tài khoản
   const resetUserState = () => {
     setCustomWorkoutSplit(getDefaultWorkoutSplit());
@@ -159,10 +162,109 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
     fetchExercisesFromSupabase();
   }, [sessionUser]);
 
-  // 3. TẢI THÔNG TIN PROFILE VÀ DỮ LIỆU TẬP LUYỆN ONLINE CỦA USER
+  // 3. THIẾT LẬP KÊNH ĐỒNG BỘ THỜI GIAN THỰC LIÊN THIẾT BỊ (SUPABASE REALTIME SYNC)
+  useEffect(() => {
+    if (!sessionUser || isDemoMode || !isSupabaseConfigured()) return;
+
+    const userId = sessionUser.id;
+    const channelName = `flexifit-realtime-user-${userId}`;
+
+    const channel = supabase.channel(channelName, {
+      config: {
+        broadcast: { self: false }
+      }
+    });
+
+    realtimeChannelRef.current = channel;
+
+    // A. Lắng nghe Broadcast từ các thiết bị khác đang đăng nhập cùng tài khoản (< 50ms)
+    channel.on("broadcast", { event: "DATA_MUTATION" }, (eventPayload) => {
+      const { type, payload } = eventPayload.payload || {};
+      console.log("⚡ Nhận sự kiện đồng bộ thời gian thực từ thiết bị khác:", type);
+
+      if (type === "SPLIT_UPDATED" && payload) {
+        setCustomWorkoutSplit(payload);
+        setLocalStorageData("custom-workout-split", userId, payload);
+        addToast("Lịch tập đã được đồng bộ từ thiết bị khác!", "success");
+      } else if (type === "SETS_UPDATED") {
+        loadUserOnlineData(userId);
+        addToast("Nhật ký tập vừa được cập nhật từ thiết bị khác!", "success");
+      } else if (type === "WEIGHT_UPDATED") {
+        loadUserOnlineData(userId);
+        addToast("Cân nặng vừa được cập nhật từ thiết bị khác!", "success");
+      } else if (type === "HEIGHT_UPDATED" && payload) {
+        setHeight(payload);
+        setLocalStorageData("height", userId, payload);
+        addToast("Chiều cao vừa được cập nhật từ thiết bị khác!", "success");
+      }
+    });
+
+    // B. Lắng nghe trực tiếp Postgres CDC thay đổi trên CSDL Supabase
+    channel
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "custom_workout_splits", filter: `user_id=eq.${userId}` },
+        (changePayload) => {
+          if (changePayload.new && changePayload.new.split_data) {
+            setCustomWorkoutSplit(changePayload.new.split_data);
+            setLocalStorageData("custom-workout-split", userId, changePayload.new.split_data);
+            addToast("Lịch tập đã được đồng bộ từ server!", "info");
+          }
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "user_logs", filter: `user_id=eq.${userId}` },
+        () => {
+          loadUserOnlineData(userId);
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "weight_history", filter: `user_id=eq.${userId}` },
+        () => {
+          loadUserOnlineData(userId);
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "profiles", filter: `id=eq.${userId}` },
+        (changePayload) => {
+          if (changePayload.new && changePayload.new.height) {
+            setHeight(changePayload.new.height);
+          }
+        }
+      );
+
+    channel.subscribe((status) => {
+      if (status === "SUBSCRIBED") {
+        console.log(`🟢 Kênh đồng bộ thời gian thực cho User ${userId} đã sẵn sàng.`);
+      }
+    });
+
+    return () => {
+      supabase.removeChannel(channel);
+      realtimeChannelRef.current = null;
+    };
+  }, [sessionUser, isDemoMode]);
+
+  // Hàm phát tín hiệu Broadcast tới các thiết bị khác khi thiết bị hiện tại có thay đổi
+  const broadcastMutationToDevices = (type, payload) => {
+    if (!sessionUser || isDemoMode || !realtimeChannelRef.current) return;
+    try {
+      realtimeChannelRef.current.send({
+        type: "broadcast",
+        event: "DATA_MUTATION",
+        payload: { type, payload }
+      });
+    } catch (e) {
+      console.warn("Không thể phát tín hiệu đồng bộ broadcast:", e);
+    }
+  };
+
+  // 4. TẢI THÔNG TIN PROFILE VÀ DỮ LIỆU TẬP LUYỆN ONLINE CỦA USER
   const fetchUserProfile = async (user) => {
     setAuthChecking(true);
-    // Dọn dẹp bộ nhớ đệm state của user cũ trước
     resetUserState();
 
     try {
@@ -231,7 +333,6 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
         setCustomWorkoutSplit(split.split_data);
         setLocalStorageData("custom-workout-split", userId, split.split_data);
       } else {
-        // Kiểm tra xem User này có lịch lưu trong LocalStorage chưa
         const localSplit = getLocalStorageData("custom-workout-split", userId, null);
         if (localSplit) {
           setCustomWorkoutSplit(localSplit);
@@ -241,7 +342,6 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
               .upsert({ user_id: userId, split_data: localSplit }, { onConflict: "user_id" });
           }
         } else {
-          // Khởi tạo bộ lịch hoàn toàn mới độc lập từ mẫu mặc định
           const freshSplit = getDefaultWorkoutSplit();
           setCustomWorkoutSplit(freshSplit);
           setLocalStorageData("custom-workout-split", userId, freshSplit);
@@ -404,6 +504,8 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
             addToast("Đã lưu offline vào thiết bị! Sẽ tự động đồng bộ khi có kết nối.", "warning");
           }
         }
+        // Phát tín hiệu Realtime Broadcast cho các thiết bị khác của cùng tài khoản này
+        broadcastMutationToDevices("SETS_UPDATED", newSets);
       } catch (e) {
         console.error("Lỗi đồng bộ sets lên Supabase:", e.message);
         for (const exId of sessionExercises) {
@@ -447,7 +549,6 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
 
   // --- CẬP NHẬT LỊCH TẬP TUẦN TỰ SẮP XẾP ---
   const handleReorderExercisesInSplit = async (dayKey, index, direction) => {
-    // Deep clone để tránh đột biến bộ nhớ đệm
     const newSplit = JSON.parse(JSON.stringify(customWorkoutSplit));
     if (!newSplit[dayKey] || !newSplit[dayKey].exercises) return;
 
@@ -473,6 +574,8 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
         await supabase
           .from("custom_workout_splits")
           .upsert({ user_id: sessionUser.id, split_data: newSplit }, { onConflict: "user_id" });
+        // Đồng bộ thời gian thực liên thiết bị
+        broadcastMutationToDevices("SPLIT_UPDATED", newSplit);
       } else {
         queueOfflineAction("SAVE_SPLIT", { splitData: newSplit });
         addToast("Đã lưu lịch tập offline.", "warning");
@@ -481,7 +584,6 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
   };
 
   const handleAddExerciseToSplit = async (dayKey, exerciseId) => {
-    // Deep clone để tránh đột biến bộ nhớ đệm
     const newSplit = JSON.parse(JSON.stringify(customWorkoutSplit));
     if (!newSplit[dayKey]) return;
 
@@ -512,6 +614,8 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
         await supabase
           .from("custom_workout_splits")
           .upsert({ user_id: sessionUser.id, split_data: newSplit }, { onConflict: "user_id" });
+        // Đồng bộ thời gian thực liên thiết bị
+        broadcastMutationToDevices("SPLIT_UPDATED", newSplit);
       } else {
         queueOfflineAction("SAVE_SPLIT", { splitData: newSplit });
         addToast("Đã thêm bài tập offline.", "warning");
@@ -520,7 +624,6 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
   };
 
   const handleRemoveExerciseFromSplit = async (dayKey, exerciseId) => {
-    // Deep clone để tránh đột biến bộ nhớ đệm
     const newSplit = JSON.parse(JSON.stringify(customWorkoutSplit));
     if (!newSplit[dayKey] || !newSplit[dayKey].exercises) return;
 
@@ -542,6 +645,8 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
         await supabase
           .from("custom_workout_splits")
           .upsert({ user_id: sessionUser.id, split_data: newSplit }, { onConflict: "user_id" });
+        // Đồng bộ thời gian thực liên thiết bị
+        broadcastMutationToDevices("SPLIT_UPDATED", newSplit);
       } else {
         queueOfflineAction("SAVE_SPLIT", { splitData: newSplit });
       }
@@ -560,6 +665,7 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
           .update({ height: newHeight })
           .eq("id", sessionUser.id);
         addToast("Đã cập nhật chiều cao lên server!", "success");
+        broadcastMutationToDevices("HEIGHT_UPDATED", newHeight);
       } else {
         queueOfflineAction("SAVE_HEIGHT", { height: newHeight });
         addToast("Đã lưu chiều cao offline.", "warning");
@@ -599,6 +705,7 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
               });
           }
           addToast("Đã đồng bộ cân nặng lên đám mây!", "success");
+          broadcastMutationToDevices("WEIGHT_UPDATED", updatedHistory);
         } else {
           queueOfflineAction("SAVE_WEIGHT", { date: todayStr, weight: weightObj?.weight });
           addToast("Đã lưu cân nặng offline.", "warning");
