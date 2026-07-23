@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { X, CheckCircle2, ChevronLeft, ChevronRight, Play, Award, RefreshCw, Dumbbell, History } from "lucide-react";
 import RestTimer from "./RestTimer";
+import ExerciseImageAnimator from "./ExerciseImageAnimator";
 
 export default function WorkoutMode({ 
   exercises = [], 
@@ -181,23 +182,32 @@ export default function WorkoutMode({
       {/* CORE ACTIVE EXERCISE CARD */}
       <div className="flex-1 flex flex-col justify-center px-6 py-4 max-w-sm mx-auto w-full">
         {activeEx ? (
-          <div className="flex flex-col text-center">
+          <div className="flex flex-col text-center space-y-3">
+            
+            {/* ANIMATED ACTION IMAGE PREVIEW */}
+            <ExerciseImageAnimator
+              images={activeEx.images || [`/exercises/${activeEx.id}/0.jpg`, `/exercises/${activeEx.id}/1.jpg`]}
+              alt={activeEx.nameVi || activeEx.name}
+              className="h-44 w-full"
+              autoPlay={true}
+            />
+
             {/* Tên nhóm cơ chính */}
-            <span className="text-xs text-lime-400 font-black uppercase tracking-widest bg-lime-400/10 self-center px-3 py-1 rounded-full mb-3">
+            <span className="text-xs text-lime-400 font-black uppercase tracking-widest bg-lime-400/10 self-center px-3 py-1 rounded-full">
               {activeEx.primaryMuscle}
             </span>
 
-            {/* Tên bài tập cực to */}
-            <h1 className="text-2xl font-black text-white leading-tight mb-2 px-2">
-              {activeEx.name.split(" (")[0]}
+            {/* Tên bài tập */}
+            <h1 className="text-xl font-black text-white leading-tight px-2">
+              {activeEx.nameVi || activeEx.name}
             </h1>
             
-            {/* Tên máy tập */}
-            <p className="text-sm text-zinc-400 mb-6 font-semibold flex items-center justify-center gap-1.5">
-              <span>{activeEx.machine}</span>
+            {/* Tên dụng cụ / máy tập */}
+            <p className="text-xs text-zinc-400 font-semibold flex items-center justify-center gap-1.5">
+              <span>{activeEx.equipment || activeEx.machine}</span>
               <button 
                 onClick={() => setShowSwapModal(true)}
-                className="p-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-lime-400 transition-colors"
+                className="p-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-lime-400 transition-colors cursor-pointer"
                 title="Đổi bài tập tương đương"
               >
                 <RefreshCw size={14} />

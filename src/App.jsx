@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Dumbbell, Scale, LogOut, Settings, WifiOff, Zap, RefreshCw } from "lucide-react";
+import { Dumbbell, Scale, LogOut, Settings, WifiOff, Zap, RefreshCw, Sparkles } from "lucide-react";
 import { getDefaultWorkoutSplit, exercisesDb } from "./data/exercises";
 import { supabase, isSupabaseConfigured } from "./supabaseClient";
 import Dashboard from "./components/Dashboard";
 import WorkoutSession from "./components/WorkoutSession";
 import WorkoutMode from "./components/WorkoutMode";
 import PersonalStats from "./components/PersonalStats";
+import AiWorkoutPlanner from "./components/AiWorkoutPlanner";
 import Auth from "./components/Auth";
 import AdminPanel from "./components/AdminPanel";
 import ConnectionModal from "./components/ConnectionModal";
@@ -653,6 +654,25 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
     }
   };
 
+  // --- ÁP DỤNG LỊCH TẬP TẠO BỞI AI ---
+  const handleApplyAiSplit = async (newSplit) => {
+    setCustomWorkoutSplit(newSplit);
+    setLocalStorageData("custom-workout-split", currentUserId, newSplit);
+
+    if (sessionUser && !isDemoMode) {
+      if (connectionStatus === "online") {
+        await supabase
+          .from("custom_workout_splits")
+          .upsert({ user_id: sessionUser.id, split_data: newSplit }, { onConflict: "user_id" });
+        broadcastMutationToDevices("SPLIT_UPDATED", newSplit);
+      } else {
+        queueOfflineAction("SAVE_SPLIT", { splitData: newSplit });
+      }
+    }
+    addToast("Đã áp dụng lịch tập AI cá nhân hóa mới thành công!", "success");
+    setActiveTab("dashboard");
+  };
+
   // --- CẬP NHẬT CÂN NẶNG & CHIỀU CAO ---
   const handleUpdateHeight = async (newHeight) => {
     setHeight(newHeight);
@@ -771,6 +791,17 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
           height={height}
           setHeight={handleUpdateHeight}
           workoutHistory={workoutHistory}
+        />
+      );
+    }
+
+    if (activeTab === "ai_trainer") {
+      const currentW = weightHistory.length > 0 ? weightHistory[weightHistory.length - 1].weight : 65;
+      return (
+        <AiWorkoutPlanner
+          currentHeight={height}
+          currentWeight={currentW}
+          onApplySplitToApp={handleApplyAiSplit}
         />
       );
     }
@@ -926,8 +957,20 @@ function AppContent({ sessionUser, setSessionUser, isDemoMode, setIsDemoMode, cu
           </button>
 
           <button
+            onClick={() => setActiveTab("ai_trainer")}
+            className={`flex flex-col items-center gap-1 py-1 px-4 rounded-xl transition-all cursor-pointer ${
+              activeTab === "ai_trainer"
+                ? "text-lime-400 font-bold scale-105"
+                : "text-zinc-500 hover:text-zinc-300 font-medium"
+            }`}
+          >
+            <Sparkles size={20} className={activeTab === "ai_trainer" ? "fill-lime-400/10" : ""} />
+            <span className="text-[10px] tracking-wide">AI Trainer</span>
+          </button>
+
+          <button
             onClick={() => setActiveTab("stats")}
-            className={`flex flex-col items-center gap-1 py-1 px-5 rounded-xl transition-all ${
+            className={`flex flex-col items-center gap-1 py-1 px-4 rounded-xl transition-all cursor-pointer ${
               activeTab === "stats"
                 ? "text-lime-400 font-bold scale-105"
                 : "text-zinc-500 hover:text-zinc-300 font-medium"

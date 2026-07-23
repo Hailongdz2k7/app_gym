@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { ArrowLeft, RefreshCw, Eye, CheckCircle2, ChevronRight, Play, Award, Dumbbell, History, Plus, Trash2, X } from "lucide-react";
 import AnatomyViewer from "./AnatomyViewer";
 import RestTimer from "./RestTimer";
+import ExerciseImageAnimator from "./ExerciseImageAnimator";
 
 export default function WorkoutSession({ 
   dayKey, 
@@ -261,22 +262,33 @@ export default function WorkoutSession({
         {activeExercise && (
           <div className="flex-1 flex flex-col gap-5">
             {/* THÔNG TIN BÀI TẬP */}
-            <div className="bg-zinc-900 border border-zinc-900 rounded-3xl p-5 shadow-xl">
-              <div className="flex items-start justify-between gap-4 mb-3">
+            <div className="bg-zinc-900 border border-zinc-900 rounded-3xl p-5 shadow-xl space-y-4">
+              
+              {/* ANIMATED ACTION IMAGE PREVIEW */}
+              <ExerciseImageAnimator
+                images={activeExercise.images || [`/exercises/${activeExercise.id}/0.jpg`, `/exercises/${activeExercise.id}/1.jpg`]}
+                alt={activeExercise.nameVi || activeExercise.name}
+                className="h-44 w-full"
+                autoPlay={true}
+              />
+
+              <div className="flex items-start justify-between gap-4">
                 <div>
                   <span className="text-[10px] font-bold text-lime-400 uppercase tracking-widest bg-lime-400/10 px-2.5 py-0.5 rounded-full">
                     {activeExercise.primaryMuscle}
                   </span>
-                  <h2 className="text-lg font-black text-white mt-1.5 leading-snug">{activeExercise.name}</h2>
+                  <h2 className="text-base font-black text-white mt-1.5 leading-snug">
+                    {activeExercise.nameVi || activeExercise.name}
+                  </h2>
                   <p className="text-xs text-zinc-400 mt-1 flex items-center gap-1 font-semibold">
-                    <span className="w-1.5 h-1.5 rounded-full bg-lime-400"></span> Thiết bị: {activeExercise.machine}
+                    <span className="w-1.5 h-1.5 rounded-full bg-lime-400"></span> Dụng cụ: {activeExercise.equipment || activeExercise.machine}
                   </p>
                 </div>
                 
                 {/* Nút Đổi bài tập */}
                 <button 
                   onClick={() => setShowSwapModal(true)}
-                  className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-bold transition-all border border-zinc-800 hover:border-zinc-700"
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-bold transition-all border border-zinc-800 hover:border-zinc-700 cursor-pointer"
                   title="Đổi bài tập tương đương"
                 >
                   <RefreshCw size={12} /> Đổi bài
